@@ -22,7 +22,7 @@ def read_text_file(file_path):
 
 
 def score_call(path):
-    with open("/svc/project/genaipilot/fine-tune/output/true.txt", 'w') as f:
+    with open("/output/true.txt", 'w') as f:
         file_list = os.listdir(path)
         sorted_list = sorted(file_list)
         # sorted_list = sorted(file_list, key=lambda x: int(x.split('.')[0]))
@@ -123,6 +123,6 @@ def score_call(path):
 
 
 if __name__ == "__main__":
-    file_path = "/svc/project/genaipilot/fss_predict/true"
+    file_path = "/data/true"
     
     score_call(file_path)
