@@ -23,15 +23,14 @@ def read_text_file(file_path):
 
 
 def score_call(path):
-    with open("output/true.txt", 'w') as f:
+    with open("output/true_8b_kor.txt", 'w') as f:
         file_list = os.listdir(path)
         sorted_list = sorted(file_list)
-        # sorted_list = sorted(file_list, key=lambda x: int(x.split('.')[0]))
         for text in sorted_list:
             print(text)
             file_path = os.path.join(path, text)
             document_text = read_text_file(file_path)
-            prompt = '''
+            prompt = f'''
                     카드사 고객 상담 내역 분석 담당 역할을 수행하세요. 당신의 업무는 카드사의 상담원과 고객 간 통화 내역을 분석하여 지정된 일곱 가지 기준에 따라 0점에서 3점까지 점수를 매기고, 이를 표로 정리해주는 것입니다. 
                     각 항목 별 점수에 대한 자세한 설명도 포함해 주세요. 표 아래에는 총점을 표시하고 점수 기준에 따른 민원 가능성을 알려주세요. 하나 이상의 통화 내역이 입력되는 경우는 동일한 고객과의 통화 내역이므로, 입력된 전체 통화 내역을 분석하여 하나의 결과로 반환해주세요. 
                     통화 시간이 여러 번 나뉜 경우, 각 통화의 마지막 줄에 hh:mm:ss 형색으로 기재된 ‘문장종료시간’을 합산하여 총 통화 시간을 계산하고, 이 값에 따라 점수를 부여하세요. 총 통화 시간이 10분을 초과할 경우 10분 단위로 추가 점수를 부여하세요. (자세한 내용은 기준 7번 항목을 참고하세요.) 통화 내역은 출력하지 마세요.
@@ -77,79 +76,43 @@ def score_call(path):
                     - 1점: 총 통화 시간 0분 이상 10분 미만
                     - 2점: 총 통화 시간 10분 이상 20분 미만
                     - 3점: 총 통화 시간 20분 이상
-            '''
-            instruction = f'''
-                        입력으로 받은 통화 내역 파일을 prompt의 일곱 가지 기준으로 평가하여 각 항목 별 점수와 근거, 항목 별 점수의 총점을 구해줘. 
 
-                        통화 내역: {document_text}
-                        항목 별 점수 및 근거:
-                        총점:
-                         '''
+                    입력으로 받은 통화 내역 파일을 prompt의 일곱 가지 기준으로 평가하여 각 항목 별 점수와 근거, 항목 별 점수의 총점을 구하세요.
 
-            messages = [
-                {"role": "system", "content": f"{prompt}"},
-                {"role": "user", "content": f"{instruction}"}
-            ]
+                    통화 내역: {document_text}
+                    항목 별 점수 및 근거:
+                    총점: '''
 
-            # input_ids = tokenizer.apply_chat_template(
-            #     messages,
-            #     add_generation_prompt=True,
-            #     return_tensors="pt",
-            #     # max_length=model.config.max_position_embeddings*2,
-            #     # truncation=True
-            # ).to(model.device)
-
-            # terminators = [
-            #     tokenizer.eos_token_id,
-            #     tokenizer.convert_tokens_to_ids("<|eot_id|>")
-            # ]
-
-            # outputs = model.generate(
-            #     input_ids,
-            #     max_new_tokens=1024,
-            #     eos_token_id=terminators,
-            #     do_sample=True,
-            #     temperature=0.1,
-            #     top_p=0.5,
-            #     repetition_penalty = 1.1
-            # )
-
-            # summary = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
-
-            inputs = tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
+            # 일반 텍스트 처리에 적합한 토큰화 코드
+            input_ids = tokenizer(
+                prompt,
                 return_tensors="pt",
-                padding=True,
-                # max_length=model.config.max_position_embeddings * 2,
-                # truncation=True
+                # max_length=model.config.max_position_embeddings*2,
+                truncation=True
             ).to(model.device)
 
-            input_ids = inputs
-            attention_mask = torch.ones(input_ids.shape, device=model.device)
-            pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-            
+            terminators = [
+                tokenizer.eos_token_id,
+                tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            ]
+
             outputs = model.generate(
                 input_ids,
-                attention_mask=attention_mask,
                 max_new_tokens=1024,
-                pad_token_id=pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=terminators,
                 do_sample=True,
                 temperature=0.1,
                 top_p=0.5,
                 repetition_penalty=1.1
             )
             
-            summary = tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
+            summary = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
 
             print("LLM 답변: \n", summary)
             
-            f.write(text + "\n")
             f.write(summary + "\n\n")
             f.write("-"*100 + "\n\n")
             torch.cuda.empty_cache()
-
 
 
 if __name__ == "__main__":
