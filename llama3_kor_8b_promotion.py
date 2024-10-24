@@ -1,5 +1,6 @@
 import os, torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from docx import Document
 
 model_id = 'MLP-KTLim/llama-3-Korean-Bllossom-8B'
 
@@ -11,6 +12,14 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 model.eval()
 
+def read_word_file(file_path):
+    doc = Document(file_path)
+    full_text = []
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
+            full_text.append(paragraph.text)
+    return "\n".join(full_text)
+
 def read_text_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         full_text = []
@@ -20,48 +29,8 @@ def read_text_file(file_path):
                 full_text.append(stripped_line)
     return "\n".join(full_text)
 
-def summarize_contract(text):
-    document_text = read_text_file(file_path)
-    prompt = '''Your job is to identify the key points of the contract and summarize them. Follow the instructions below to summarize the contract.당신의 역할은 계약서의 핵심 내용을 파악하고, 이를 요약하는 것입니다. 아래 지시사항을 따라서 계약서 요약을 수행합니다.'''
-    instruction = f'''업무위탁계약서 파일을 보고, 계약 내용 중 핵심 내용들을 요약해주세요. 
-                    - '계약 날짜', '총 계약 기간', '계약 금액', '계약 대상 업무(위탁 업무)', '서비스 수준'은 핵심 내용이므로, 답변에 반드시 포함해주세요.
-                    - '총 계약 기간'은 '계약 날짜'부터 시작해야 합니다. 총 계약 기간은 다음과 같은 형식으로 답변해주세요. (ex. 총 계약 기간: 2024.01.02~2025.01.01)
-                    - '서비스 수준'은 서비스 별 상세내용과 제공횟수에 대한 내용이 포함되어야 합니다.
-                    
-                    업무위탁계약서: {document_text}
-                    요약: '''
-    messages = [
-        {"role": "system", "content": f"{prompt}"},
-        {"role": "user", "content": f"{instruction}"}
-    ]
-
-    input_ids = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        return_tensors="pt"
-    ).to(model.device)
-
-    terminators = [
-        tokenizer.eos_token_id,
-        tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    ]
-
-    outputs = model.generate(
-        input_ids,
-        max_new_tokens=1024,
-        eos_token_id=terminators,
-        do_sample=True,
-        temperature=0.1,
-        top_p=0.5,
-        repetition_penalty = 1.1
-    )
-    
-    summary = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
-
-    return summary
-
 def summarize_promotion(path):
-    with open("/svc/project/genaipilot/fine-tune/output/result_oct.txt", 'w') as f:
+    with open("/svc/project/llm-fine-tune/output/result_oct.txt", 'w') as f:
         for text in os.listdir(path):
             print(text)
             file_path = os.path.join(path, text)
@@ -242,13 +211,7 @@ def insight_compare(text_a, text_b):
 
 
 if __name__ == "__main__":
-    # file_path = "01_업무위탁계약서(표준)2024 수정_비식별화 1.docx"
-    file_path = "/svc/project/genaipilot/fine-tune/data/oct/"
-    text = '/svc/project/genaipilot/fine-tune/output/result_oct.txt'
-
-    text_a = '/svc/project/genaipilot/fine-tune/output/result_sep.txt'
-    text_b = '/svc/project/genaipilot/fine-tune/output/result_oct.txt'
-
+    file_path = "/svc/project/llm-fine-tune/data/contract/01_업무위탁계약서(표준)2024 수정_비식별화.docx"
     # summarize_promotion(file_path)
     # insight_promotion(text)
-    insight_compare(text_a, text_b)
+    # insight_compare(text_a, text_b)

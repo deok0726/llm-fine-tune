@@ -91,57 +91,63 @@ def score_call(path):
                 {"role": "user", "content": f"{instruction}"}
             ]
 
-            # input_ids = tokenizer.apply_chat_template(
-            #     messages,
-            #     add_generation_prompt=True,
-            #     return_tensors="pt",
-            #     # max_length=model.config.max_position_embeddings*2,
-            #     # truncation=True
-            # ).to(model.device)
-
-            # terminators = [
-            #     tokenizer.eos_token_id,
-            #     tokenizer.convert_tokens_to_ids("<|eot_id|>")
-            # ]
-
-            # outputs = model.generate(
-            #     input_ids,
-            #     max_new_tokens=1024,
-            #     eos_token_id=terminators,
-            #     do_sample=True,
-            #     temperature=0.1,
-            #     top_p=0.5,
-            #     repetition_penalty = 1.1
-            # )
-
-            # summary = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
-
-            inputs = tokenizer.apply_chat_template(
+            input_ids = tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 return_tensors="pt",
-                padding=True,
-                # max_length=model.config.max_position_embeddings * 2,
+                # max_length=model.config.max_position_embeddings*2,
                 # truncation=True
             ).to(model.device)
 
-            input_ids = inputs
-            attention_mask = torch.ones(input_ids.shape, device=model.device)
-            pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-            
+            if input_ids.shape[-1] > model.config.max_position_embeddings:
+                print(f"입력 데이터가 너무 큽니다: {file_path}")
+                f.write(f"{text}: 입력 데이터가 모델의 입력 제한을 초과하여 처리되지 않았습니다.\n\n")
+                f.write("-"*100 + "\n\n")
+                continue
+
+            terminators = [
+                tokenizer.eos_token_id,
+                tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            ]
+
             outputs = model.generate(
                 input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=1024,
-                pad_token_id=pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                max_new_tokens=2048,
+                eos_token_id=terminators,
                 do_sample=True,
                 temperature=0.1,
                 top_p=0.5,
-                repetition_penalty=1.1
+                repetition_penalty = 1.1
             )
+
+            summary = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
+
+            # inputs = tokenizer.apply_chat_template(
+            #     messages,
+            #     add_generation_prompt=True,
+            #     return_tensors="pt",
+            #     padding=True,
+            #     # max_length=model.config.max_position_embeddings * 2,
+            #     # truncation=True
+            # ).to(model.device)
+
+            # input_ids = inputs
+            # attention_mask = torch.ones(input_ids.shape, device=model.device)
+            # pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
             
-            summary = tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
+            # outputs = model.generate(
+            #     input_ids,
+            #     attention_mask=attention_mask,
+            #     max_new_tokens=1024,
+            #     pad_token_id=pad_token_id,
+            #     eos_token_id=tokenizer.eos_token_id,
+            #     do_sample=True,
+            #     temperature=0.1,
+            #     top_p=0.5,
+            #     repetition_penalty=1.1
+            # )
+            
+            # summary = tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
 
             print("LLM 답변: \n", summary)
             
@@ -153,6 +159,6 @@ def score_call(path):
 
 
 if __name__ == "__main__":
-    file_path = "data/true"
+    file_path = "/svc/project/genaipilot/fss_predict/true"
     
     score_call(file_path)
