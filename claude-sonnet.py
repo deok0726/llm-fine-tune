@@ -16,7 +16,6 @@ def read_text_file(file_path):
                 full_text.append(stripped_line)
     return "\n".join(full_text)
 
-
 def read_word_file(file_path):
     doc = Document(file_path)
     full_text = []

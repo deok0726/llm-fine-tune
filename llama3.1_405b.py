@@ -1,7 +1,8 @@
-import os
+import os, sys, time
 from docx import Document
 from openai import OpenAI
 from dotenv import load_dotenv
+from httpcore import RemoteProtocolError
 
 dotenv_path = os.path.join(os.path.dirname(__file__), 'config/.env')
 load_dotenv(dotenv_path)
@@ -9,8 +10,9 @@ api_key = os.getenv("NVIDIA_API_KEY")
 
 
 def read_text_file(file_path):
+    title = os.path.splitext(os.path.basename(file_path))[0]
     with open(file_path, 'r', encoding='utf-8') as f:
-        full_text = []
+        full_text = [title]
         for line in f:
             stripped_line = line.strip()
             if stripped_line:
@@ -176,6 +178,47 @@ def renew_contract(old, new):
                 print(chunk.choices[0].delta.content, end="")
                 f.write(chunk.choices[0].delta.content)
 
+def criterion_call(path):
+    client = OpenAI(
+    base_url = "https://integrate.api.nvidia.com/v1",
+    api_key = api_key
+    )
+
+    file_list = os.listdir(path)
+    sorted_list = sorted(file_list)
+    document_text = ""
+    for text in sorted_list:
+        file_path = os.path.join(path, text)
+        document_text += read_text_file(file_path) + "\n\n"
+
+    # print(document_text)
+    # print("-"*100)
+
+    system_instruction = '''
+                    카드사의 상담원과 고객 간 통화 내역을 분석하여 고객이 통화 후 금융감독원에 민원을 제기할 가능성이 높은 통화 내역을 찾아야 합니다. 
+                    입력 파일들은 실제 상담원과 고객간 통화 내역으로, 이후 금융감독원 민원으로 접수된 통화 내역입니다. 'Sheet: 숫자'는 한 고객과 이루어진 통화의 횟수를 의미합니다.
+                    통화 내역들을 기반으로 금융감독원 민원 전이 가능성을 판단할 수 있는 핵심 지표들을 뽑아주세요.'''
+    
+    user_prompt = f'''
+                    통화 내역 모음: {document_text}
+                    특징: '''
+
+    completion = client.chat.completions.create(
+    model="meta/llama-3.1-405b-instruct",
+    messages=[
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": user_prompt}
+        ],
+        temperature=0.1,
+        top_p=0.5,
+        max_tokens=1024,
+        stream=True
+    )
+
+    for chunk in completion:
+        if chunk.choices[0].delta.content is not None:
+            print(chunk.choices[0].delta.content, end="")
+
 def customer_call(path):
     client = OpenAI(
     base_url = "https://integrate.api.nvidia.com/v1",
@@ -260,15 +303,15 @@ def customer_call(path):
                     f.write(chunk.choices[0].delta.content)
             f.write("\n" + "-"*100 + "\n")
 
-def summary_promotion(path):
+def summary_promotion(path, month):
     client = OpenAI(
     base_url = "https://integrate.api.nvidia.com/v1",
     api_key = api_key
     )
 
-    with open("/svc/project/llm-fine-tune/summary_sep.txt", 'w') as f:
+    with open(f"/svc/project/llm-fine-tune/summary_{month}_405b.txt", 'w') as f:
         for text in os.listdir(path):
-            print(text)
+            print("\n[", text, "]", "\n")
             file_path = os.path.join(path, text)
             document_text = read_text_file(file_path)
             system_instruction = '''당신은 카드사의 캐시백 혜택 요약을 수행합니다. 카드사의 특정 캐시백 프로모션에 대한 세부 정보를 제공하면 즉시 확인할 수 있는 요약 정보로 압축해주세요.'''
@@ -326,15 +369,103 @@ def summary_promotion(path):
                 if chunk.choices[0].delta.content is not None:
                     print(chunk.choices[0].delta.content, end="")
                     f.write(chunk.choices[0].delta.content)
+            print("\n" + "-"*200 + "\n")
             f.write("\n" + "-"*100 + "\n")
 
-def insight_promotion(path):
+def summary_promotion_retry(path, month):
+    client = OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=api_key,
+        timeout=300
+    )
+
+    MAX_RETRIES = 5
+    RETRY_DELAY = 5
+
+    print(f"{month} 프로모션")
+    with open(f"/svc/project/llm-fine-tune/summary_{month}_405b.txt", 'w') as f:
+        for text in os.listdir(path):
+            print("\n[", text, "]", "\n")
+            file_path = os.path.join(path, text)
+            document_text = read_text_file(file_path)
+
+            system_instruction = '''당신은 카드사의 캐시백 혜택 요약을 수행합니다. 카드사의 특정 캐시백 프로모션에 대한 세부 정보를 제공하면 즉시 확인할 수 있는 요약 정보로 압축해주세요.'''
+            user_prompt = f''' # 지시사항 1
+                            입력으로 들어온 카드 프로모션 텍스트 파일을 요약해주세요.
+
+                            # 지시사항 2
+                            요약은 다음 8가지 카테고리로 구성되어야 합니다.:
+                            1) 카드사명: 프로모션을 제공하는 카드사의 이름입니다.
+
+                            2) 최대 혜택 금액: 이 프로모션에서 고객이 당첨될 수 있는 최대 금액입니다. 프로모션 내에 여러 이벤트가 있는 경우 최대 혜택 금액은 모든 이벤트의 합이 되어야 합니다. 답변에는 최대 혜택 금액만 포함합니다.
+                            (예시) 프로모션에 이벤트 1: 90,000원, 이벤트 2: 10,000원, 이벤트 3: 30,000원 있다면 해당 프로모션의 최대 혜택 금액은 130,000원
+
+                            3) 이벤트 혜택 대상: 프로모션에 참여할 수 있는 고객입니다. 이벤트가 여러 개 있는 경우 각 이벤트의 참가 자격을 설명해주세요. 
+                            (예시) 이벤트 1: 지난 6개월 동안 활동이 없는 고객, 이벤트 2: 신규 고객
+
+                            4) 이벤트 대상 카드와 이벤트 대상 카드의 혜택: 프로모션 대상 카드를 나열하고, 카드 별 혜택에 대해서 설명해주세요. '이벤트 대상 카드'가 여러 장 있는 경우 모든 카드를 포함해야 합니다.
+                            (예시) 디지로카 Las Vegas - 국내외 가맹점 최대 2%,무이자 할부 2~3개월, 디지로카 Auto - 학원 최대 7%, 무이자 할부 2-3개월
+
+                            5) 이벤트 대상 카드의 연회비: 각 이벤트 대상 카드의 연회비를 나열합니다. 카드가 여러 개인 경우 각 카드의 연회비를 누락 없이 기재해야 합니다. “카드 종류에 따라 연회비가 다릅니다"라는 답변이 아니라 모든 카드의 연회비를 세분화하여 기재해야 합니다. 
+                            (예시)
+                            - Point Plan : 국내용 2만원 / 해외겸용 2만 3천원
+                            - 처음 : 국내용 1만 5천원 / 해외겸용 1만 8천원
+                            - 신한카드 Air One : 국내용 4만 9천원 / 해외겸용 5만 1천원
+                            - 아시아나 신한카드 Air 1.5 : 국내용 4만 3천원 / 해외겸용 4만 5천원
+                            - Deep Oil : 국내용 1만원 / 해외겸용 1만 3천원
+                            - Mr.Life : 국내용 1만 5천원 / 해외겸용 1만 8천원
+                            - 플리 : 국내용 1만 5천원 / 해외겸용 1만 8천원
+                            - B.Big(삑) : 국내용 1만원/해외겸용 1만 3천원
+
+                            6) 이벤트의 상세내용: 고객이 캐시백을 받기 위해 지출해야 하는 금액을 설명합니다. '이벤트의 상세 내용'을 요약할 때는 모든 혜택 정보를 누락 없이 정확하게 포함해야 합니다.
+                            (예시) 이벤트 1: 20만원 이상 사용 시 10만원 캐시백, 이벤트 2: 해외 가맹점에서 사용 시 6만원 캐시백
+
+                            7) 이벤트 기간: 프로모션의 유효 기간입니다. '이벤트'가 여러 개 있는 경우, 각 '이벤트'의 대상 기간을 누락 없이 기재해야 합니다. 
+                            (예시) 이벤트 1: 2024.09.01 ~ 2024.09.30, 이벤트 2: 2024.09.01 ~ 2024.10.15
+
+                            
+                            프로모션 내용 : {document_text}
+                            요약: '''
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    completion = client.chat.completions.create(
+                        model="meta/llama-3.1-405b-instruct",
+                        messages=[
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1,
+                        top_p=0.5,
+                        max_tokens=1024,
+                        stream=True
+                    )
+
+                    f.write(text + "\n")
+                    for chunk in completion:
+                        if chunk.choices[0].delta.content is not None:
+                            print(chunk.choices[0].delta.content, end="")
+                            f.write(chunk.choices[0].delta.content)
+
+                    print("\n" + "-"*200 + "\n")
+                    f.write("\n" + "-"*100 + "\n")
+                    break
+
+                except RemoteProtocolError as e:
+                    print(f"Attempt {attempt + 1} failed with error: {e}")
+                    if attempt < MAX_RETRIES - 1:
+                        print(f"Retrying in {RETRY_DELAY} seconds...")
+                        time.sleep(RETRY_DELAY)
+                    else:
+                        print("Max retries reached. Moving to the next file.")
+
+def insight_promotion(path, month):
     client = OpenAI(
     base_url = "https://integrate.api.nvidia.com/v1",
     api_key = api_key
     )
 
-    with open("/svc/project/llm-fine-tune/insight_promotion_sep.txt", 'w') as f:
+    with open(f"/svc/project/llm-fine-tune/insight_promotion_{month}_405b.txt", 'w') as f:
         document_text = read_text_file(path)
         system_instruction = '''당신은 카드사의 캐시백 혜택 요약으로부터 질문에 해당하는 답변을 제공합니다. 요약 내용에 기반하여 시사점을 도출할 수 있는 답변을 생성해주세요.'''
         user_prompt = f''' 이 문서의 주요 내용은 10월 뱅크샐러드에서 진행하는 카드사 프로모션 요약입니다.
@@ -362,10 +493,12 @@ def insight_promotion(path):
         stream=True
         )
 
+        print("\n[", month, "프로모션 정리 ]", "\n")
         for chunk in completion:
             if chunk.choices[0].delta.content is not None:
                 print(chunk.choices[0].delta.content, end="")
                 f.write(chunk.choices[0].delta.content)
+        print("\n" + "-"*200 + "\n")
 
 def insight_compare(text_a, text_b):
     client = OpenAI(
@@ -408,17 +541,22 @@ def insight_compare(text_a, text_b):
         stream=True
         )
 
+        print("\n[ 9월/10월 프로모션 비교 ]", "\n")
         for chunk in completion:
             if chunk.choices[0].delta.content is not None:
                 print(chunk.choices[0].delta.content, end="")
                 f.write(chunk.choices[0].delta.content)
 
 def summarize_news(client, path):
+    MAX_RETRIES = 5
+    RETRY_DELAY = 5
+    print("뉴스 요약")
+
     with open("/svc/project/llm-fine-tune/output/summary_news_405b.txt", 'w') as f:
         file_list = os.listdir(path)
         sorted_list = sorted(file_list, key=lambda x: int(x.split('.')[0]))
         for text in sorted_list:
-            print(text)
+            print("\n[", text, "]", "\n")
             file_path = os.path.join(path, text)
             document_text = read_text_file(file_path)
             system_instruction = '''롯데카드는 대한민국의 신용카드 회사이며, 로카는 롯데카드의 줄임말이고, LOCA는 롯데카드의 약자입니다. 당신은 롯데카드의 온라인 뉴스 관리 직원입니다. 당신의 임무는 인터넷에서 뉴스 기사를 찾아 요약하고 분석하는 것입니다. 업로드되는 txt 파일에는 뉴스 기사의 링크, 제목, 출처, 날짜, 키워드, 내용이 포함되어 있습니다.'''
@@ -435,32 +573,47 @@ def summarize_news(client, path):
 
                             입력 파일: {document_text}
                             답변:  '''
+            for attempt in range(MAX_RETRIES):
+                try:
+                    completion = client.chat.completions.create(
+                        model="meta/llama-3.1-405b-instruct",
+                        messages=[
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1,
+                        top_p=0.5,
+                        max_tokens=4096,
+                        stream=True
+                    )
 
-            completion = client.chat.completions.create(
-                model="meta/llama-3.1-405b-instruct",
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1,
-                top_p=0.5,
-                max_tokens=4096,
-                stream=True
-            )
-
-            f.write(text + "\n")
-            for chunk in completion:
-                if chunk.choices[0].delta.content is not None:
-                    print(chunk.choices[0].delta.content, end="")
-                    f.write(chunk.choices[0].delta.content)
-            f.write("\n" + "-"*100 + "\n")
+                    f.write(text + "\n")
+                    for chunk in completion:
+                        if chunk.choices[0].delta.content is not None:
+                            print(chunk.choices[0].delta.content, end="")
+                            f.write(chunk.choices[0].delta.content)
+                    print("\n" + "-"*200 + "\n")
+                    f.write("\n" + "-"*100 + "\n")
+                    break
+                
+                except RemoteProtocolError as e:
+                    print(f"Attempt {attempt + 1} failed with error: {e}")
+                    if attempt < MAX_RETRIES - 1:
+                        print(f"Retrying in {RETRY_DELAY} seconds...")
+                        time.sleep(RETRY_DELAY)
+                    else:
+                        print("Max retries reached. Moving to the next file.")
             
 def summarize_sns(client, path):
+    MAX_RETRIES = 5
+    RETRY_DELAY = 5
+    print("SNS 요약")
+
     with open("/svc/project/llm-fine-tune/output/summary_sns_405b.txt", 'w') as f:
         file_list = os.listdir(path)
         sorted_list = sorted(file_list, key=lambda x: int(x.split('.')[0]))
         for text in sorted_list:
-            print(text)
+            print("\n[", text, "]", "\n")
             file_path = os.path.join(path, text)
             document_text = read_text_file(file_path)
             system_instruction = '''롯데카드는 대한민국의 신용카드 회사이며, 로카는 롯데카드의 줄임말이고, LOCA는 롯데카드의 약자입니다. 당신은 신용카드 회사인 롯데카드의 평판 관리 직원입니다. 여러분의 임무는 롯데카드에 대한 뉴스와 소셜 미디어 평판을 수집하여 요약과 인사이트를 얻는 것입니다. 업로드되는 txt 파일에는 커뮤니티 게시물의 키워드, 링크, 제목, 작성일, 추천 수, 댓글 수, 출처, 본문, 반응이 포함되어 있습니다.'''
@@ -478,28 +631,40 @@ def summarize_sns(client, path):
 
                             입력 파일: {document_text}
                             답변: '''
+            for attempt in range(MAX_RETRIES):
+                try:
+                    completion = client.chat.completions.create(
+                        model="meta/llama-3.1-405b-instruct",
+                        messages=[
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1,
+                        top_p=0.5,
+                        max_tokens=4096,
+                        stream=True
+                    )
 
-            completion = client.chat.completions.create(
-                model="meta/llama-3.1-405b-instruct",
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1,
-                top_p=0.5,
-                max_tokens=4096,
-                stream=True
-            )
-
-            f.write(text + "\n")
-            for chunk in completion:
-                if chunk.choices[0].delta.content is not None:
-                    print(chunk.choices[0].delta.content, end="")
-                    f.write(chunk.choices[0].delta.content)
-            f.write("\n" + "-"*100 + "\n")
+                    f.write(text + "\n")
+                    for chunk in completion:
+                        if chunk.choices[0].delta.content is not None:
+                            print(chunk.choices[0].delta.content, end="")
+                            f.write(chunk.choices[0].delta.content)
+                    print("\n" + "-"*200 + "\n")
+                    f.write("\n" + "-"*100 + "\n")
+                    break
+                    
+                except RemoteProtocolError as e:
+                    print(f"Attempt {attempt + 1} failed with error: {e}")
+                    if attempt < MAX_RETRIES - 1:
+                        print(f"Retrying in {RETRY_DELAY} seconds...")
+                        time.sleep(RETRY_DELAY)
+                    else:
+                        print("Max retries reached. Moving to the next file.")
 
 def insight_news(client, text):
     with open("/svc/project/llm-fine-tune/output/insight_news_405b.txt", 'w') as f:
+        print("뉴스 분석")
         document_text = read_text_file(text)
         system_instruction = '''롯데카드는 대한민국의 신용카드 회사이며, 로카는 롯데카드의 줄임말이고, LOCA는 롯데카드의 약자입니다. 여러분은 롯데카드의 온라인 뉴스 관리 직원입니다. 여러분의 임무는 인터넷에서 뉴스 기사를 찾아 요약하고 분석하는 것입니다. 업로드되는 txt 파일에는 뉴스 기사의 제목, 날짜, 출처, 키워드, 요약, 링크가 포함되어 있습니다.'''
         user_prompt = f'''
@@ -535,9 +700,11 @@ def insight_news(client, text):
             if chunk.choices[0].delta.content is not None:
                 print(chunk.choices[0].delta.content, end="")
                 f.write(chunk.choices[0].delta.content)
+        print("\n" + "-"*200 + "\n")
 
 def insight_sns(client, text):
     with open("/svc/project/llm-fine-tune/output/insight_sns_405b.txt", 'w') as f:
+        print("SNS 분석")
         document_text = read_text_file(text)
         system_instruction = '''롯데카드는 대한민국의 신용카드 회사이며, 로카는 롯데카드의 줄임말이고, LOCA는 롯데카드의 약자입니다. 당신은 신용카드 회사인 롯데카드의 평판 관리 직원입니다. 여러분의 임무는 롯데카드에 대한 뉴스와 소셜 미디어 평판을 수집하여 요약과 인사이트를 얻는 것입니다. 업로드되는 txt 파일에는 커뮤니티 게시물의 링크, 제목, 작성 날짜, 출처, 요약, 반응, 성향이 포함되어 있습니다.'''
         user_prompt = f'''
@@ -568,6 +735,32 @@ def insight_sns(client, text):
             if chunk.choices[0].delta.content is not None:
                 print(chunk.choices[0].delta.content, end="")
                 f.write(chunk.choices[0].delta.content)
+        print("\n" + "-"*200 + "\n")
+
+def table_output(client):
+    with open("/svc/project/llm-fine-tune/output/insight_sns_405b.txt", 'w') as f:
+        system_instruction = '''당신은 입력된 질문에 대해 답변을 표로 정리하여 생성하는 AI agent입니다.'''
+        user_prompt = f'''
+                        질문: 한국의 4대 회계법인 삼일, 삼정, 한영, 안진에 대해 직원수, 매출, 향후 전망 등을 비교해줘.
+                        답변: '''
+        
+        completion = client.chat.completions.create(
+            model="meta/llama-3.1-405b-instruct",
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            top_p=0.5,
+            max_tokens=4096,
+            stream=True
+        )
+
+        for chunk in completion:
+            if chunk.choices[0].delta.content is not None:
+                print(chunk.choices[0].delta.content, end="")
+                f.write(chunk.choices[0].delta.content)
+        print("\n" + "-"*200 + "\n")
 
 
 if __name__ == "__main__":
@@ -583,6 +776,16 @@ if __name__ == "__main__":
 
     # summarize_news(client, "/svc/project/llm-fine-tune/data/news")
     # summarize_sns(client, "/svc/project/llm-fine-tune/data/sns")
-
     # insight_news(client, "/svc/project/llm-fine-tune/output/summary_news_405b.txt")
-    insight_sns(client, "/svc/project/llm-fine-tune/output/summary_sns_405b.txt")
+    # insight_sns(client, "/svc/project/llm-fine-tune/output/summary_sns_405b.txt")
+
+    criterion_call("/svc/project/genaipilot/fss_predict/del")
+
+    # summary_promotion_retry("/svc/project/llm-fine-tune/data/sep", "sep")
+    # summary_promotion_retry("/svc/project/llm-fine-tune/data/oct", "oct")
+    # insight_promotion("/svc/project/llm-fine-tune/summary_sep_405b.txt", "sep")
+    # insight_promotion("/svc/project/llm-fine-tune/summary_oct_405b.txt", "oct")
+    # insight_compare("/svc/project/llm-fine-tune/insight_promotion_sep_405b.txt", "/svc/project/llm-fine-tune/insight_promotion_oct_405b.txt")
+
+    # table_output(client)
+
